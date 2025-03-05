@@ -6,6 +6,7 @@ import time
 import zipfile
 from pathlib import Path
 
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
@@ -13,12 +14,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 BASE_DOWNLOAD_DIR = "/opt/oneagent/versions"
+CLAMAV_REPORTS_DIR = "/opt/oneagent/clamav-reports"
 MAX_RETRIES = 3
 RETRY_DELAY = 3  
 
 def get_available_versions():
     """Fetches all available OneAgent versions using curl."""
-    dt_api_url = os.getenv("DT_API_URL")
+    dt_api_url = os.getenv("DT_API_URL", "").rstrip("/")  # Ensure no trailing slash
     dt_paas_token = os.getenv("DT_PAAS_TOKEN")
 
     if not all([dt_api_url, dt_paas_token]):
@@ -38,14 +40,18 @@ def get_available_versions():
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode == 0 and result.stdout:
             try:
-                versions = json.loads(result.stdout).get("availableVersions", [])
-                if versions:
-                    logger.info(f"Retrieved {len(versions)} versions.")
-                    return versions
+                data = json.loads(result.stdout)
+                if "availableVersions" in data and isinstance(data["availableVersions"], list):
+                    versions = data["availableVersions"]
+                    if versions:
+                        logger.info(f"Retrieved {len(versions)} versions.")
+                        return versions
+                    else:
+                        logger.error("API returned an empty version list.")
                 else:
-                    logger.error("API returned an empty version list.")
+                    logger.error(f"Unexpected API response format: {data}")
             except json.JSONDecodeError:
-                logger.error(f"Invalid JSON response: {result.stdout}")
+                logger.error(f"Invalid JSON response:\n{result.stdout}")
         else:
             logger.error(f"API request failed (Attempt {attempt}): {result.stderr or 'Empty response'}")
 
@@ -58,7 +64,7 @@ def get_available_versions():
 
 def download_oneagent(version):
     """Downloads OneAgent installer for a given version using curl and places it inside the version folder."""
-    dt_api_url = os.getenv("DT_API_URL")
+    dt_api_url = os.getenv("DT_API_URL", "").rstrip("/")
     dt_paas_token = os.getenv("DT_PAAS_TOKEN")
     output_dir = Path(BASE_DOWNLOAD_DIR) / version
 
@@ -117,6 +123,29 @@ def extract_sh(sh_path, extract_to):
     except subprocess.CalledProcessError as sh_err:
         logger.error(f"Failed to execute {sh_path}: {sh_err}")
 
+def run_clamav_scan(version):
+    """Runs a ClamAV scan on a specific OneAgent version directory and saves the report."""
+    version_dir = Path(BASE_DOWNLOAD_DIR) / version
+    report_dir = Path(CLAMAV_REPORTS_DIR) / f"oneagent-{version}"
+    report_file = report_dir / "clamav_report.txt"
+
+    if not version_dir.exists():
+        logger.error(f"Skipping ClamAV scan: Version directory {version_dir} does not exist.")
+        return
+
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(f"Running ClamAV scan for version {version}...")
+
+    command = ["clamscan", "-r", str(version_dir)]
+    
+    with open(report_file, "w") as report:
+        result = subprocess.run(command, stdout=subprocess.PIPE, text=True)
+        infected_files = [line for line in result.stdout.split("\n") if "FOUND" in line]
+        report.writelines("\n".join(infected_files))
+
+    logger.info(f"ClamAV scan completed for version {version}. Report saved in {report_file}")
+
 def main():
     versions = get_available_versions()
     if not versions:
@@ -125,6 +154,11 @@ def main():
 
     for version in versions:
         download_oneagent(version)
+    
+    logger.info("All downloads completed. Running ClamAV scans...")
+    
+    for version in versions:
+        run_clamav_scan(version)
 
 if __name__ == "__main__":
     main()
