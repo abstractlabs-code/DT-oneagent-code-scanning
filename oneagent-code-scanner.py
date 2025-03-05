@@ -124,7 +124,7 @@ def extract_sh(sh_path, extract_to):
         logger.error(f"Failed to execute {sh_path}: {sh_err}")
 
 def run_clamav_scan(version):
-    """Runs a ClamAV scan on a specific OneAgent version directory and saves the report."""
+    """Runs a full ClamAV scan on a specific OneAgent version directory and saves the entire report."""
     version_dir = Path(BASE_DOWNLOAD_DIR) / version
     report_dir = Path(CLAMAV_REPORTS_DIR) / f"oneagent-{version}"
     report_file = report_dir / "clamav_report.txt"
@@ -137,14 +137,15 @@ def run_clamav_scan(version):
 
     logger.info(f"Running ClamAV scan for version {version}...")
 
-    command = ["clamscan", "-r", str(version_dir)]
+    command = ["clamscan", "-v", "-r", str(version_dir)]
     
     with open(report_file, "w") as report:
-        result = subprocess.run(command, stdout=subprocess.PIPE, text=True)
-        infected_files = [line for line in result.stdout.split("\n") if "FOUND" in line]
-        report.writelines("\n".join(infected_files))
+        result = subprocess.run(command, stdout=report, text=True)
 
-    logger.info(f"ClamAV scan completed for version {version}. Report saved in {report_file}")
+    if result.returncode == 0:
+        logger.info(f"ClamAV scan completed for version {version}. Full report saved in {report_file}")
+    else:
+        logger.error(f"ClamAV scan failed for version {version}. Check {report_file} for details.")
 
 def main():
     versions = get_available_versions()
