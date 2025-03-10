@@ -4,6 +4,7 @@ import subprocess
 import json
 import time
 import zipfile
+import requests
 from pathlib import Path
 
 # Configure logging
@@ -18,9 +19,15 @@ CLAMAV_REPORTS_DIR = "/opt/oneagent/clamav-reports"
 MAX_RETRIES = 3
 RETRY_DELAY = 3  
 
+# Confluence API details from environment variables
+CONFLUENCE_BASE_URL = os.getenv("CONFLUENCE_BASE_URL")
+CONFLUENCE_USERNAME = os.getenv("CONFLUENCE_USERNAME")
+CONFLUENCE_API_TOKEN = os.getenv("CONFLUENCE_API_TOKEN")
+CONFLUENCE_PAGE_ID = os.getenv("CONFLUENCE_PAGE_ID")
+
 def get_available_versions():
     """Fetches all available OneAgent versions using curl."""
-    dt_api_url = os.getenv("DT_API_URL", "").rstrip("/")  # Ensure no trailing slash
+    dt_api_url = os.getenv("DT_API_URL", "").rstrip("/")
     dt_paas_token = os.getenv("DT_PAAS_TOKEN")
 
     if not all([dt_api_url, dt_paas_token]):
@@ -124,42 +131,58 @@ def extract_sh(sh_path, extract_to):
         logger.error(f"Failed to execute {sh_path}: {sh_err}")
 
 def run_clamav_scan(version):
-    """Runs a full ClamAV scan on a specific OneAgent version directory and saves the entire report."""
-    version_dir = Path(BASE_DOWNLOAD_DIR) / version
-    report_dir = Path(CLAMAV_REPORTS_DIR) / f"oneagent-{version}"
-    report_file = report_dir / "clamav_report.txt"
+    """Runs a ClamAV scan only if a report does not already exist."""
+    report_file = Path(CLAMAV_REPORTS_DIR) / f"oneagent-version-{version}-clamav_report.txt"
 
+    if report_file.exists():
+        logger.info(f"Skipping ClamAV scan: Report already exists for version {version}.")
+        return report_file
+
+    version_dir = Path(BASE_DOWNLOAD_DIR) / version
     if not version_dir.exists():
         logger.error(f"Skipping ClamAV scan: Version directory {version_dir} does not exist.")
-        return
+        return None
 
-    report_dir.mkdir(parents=True, exist_ok=True)
+    Path(CLAMAV_REPORTS_DIR).mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Running ClamAV scan for version {version}...")
 
-    command = ["clamscan", "-v", "-r", str(version_dir)]
-    
     with open(report_file, "w") as report:
-        result = subprocess.run(command, stdout=report, text=True)
+        scan_command = ["clamscan", "-r", "--verbose", str(version_dir)]
+        subprocess.run(scan_command, stdout=report, text=True)
 
-    if result.returncode == 0:
-        logger.info(f"ClamAV scan completed for version {version}. Full report saved in {report_file}")
+    logger.info(f"ClamAV scan completed for version {version}. Report saved in {report_file}")
+    return report_file
+
+def upload_report_to_confluence(report_file):
+    """Uploads the ClamAV report to Confluence if it does not already exist."""
+    url = f"{CONFLUENCE_BASE_URL}/rest/api/content/{CONFLUENCE_PAGE_ID}/child/attachment"
+    auth = (CONFLUENCE_USERNAME, CONFLUENCE_API_TOKEN)
+    headers = {"X-Atlassian-Token": "no-check"}  # Fix for XSRF error
+
+    response = requests.get(url, auth=auth, headers=headers)
+    if response.status_code == 200:
+        attachments = response.json().get("results", [])
+        if any(attachment["title"] == report_file.name for attachment in attachments):
+            logger.info(f"Report {report_file.name} already exists in Confluence. Skipping upload.")
+            return
+
+    logger.info(f"Uploading {report_file} to Confluence...")
+    files = {"file": (report_file.name, open(report_file, "rb"), "text/plain")}
+    response = requests.post(url, auth=auth, headers=headers, files=files)
+    
+    if response.status_code in [200, 201]:
+        logger.info(f"Report {report_file.name} uploaded successfully to Confluence.")
     else:
-        logger.error(f"ClamAV scan failed for version {version}. Check {report_file} for details.")
+        logger.error(f"Failed to upload report {report_file.name}. Response: {response.text}")
 
 def main():
     versions = get_available_versions()
-    if not versions:
-        logger.error("No versions available for download. Exiting.")
-        return
-
     for version in versions:
         download_oneagent(version)
-    
-    logger.info("All downloads completed. Running ClamAV scans...")
-    
-    for version in versions:
-        run_clamav_scan(version)
+        report_file = run_clamav_scan(version)
+        if report_file:
+            upload_report_to_confluence(report_file)
 
 if __name__ == "__main__":
     main()
