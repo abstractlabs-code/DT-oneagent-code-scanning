@@ -4,10 +4,9 @@ import subprocess
 import json
 import time
 import zipfile
-import requests
 from pathlib import Path
+from atlassian import Confluence
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
@@ -19,7 +18,6 @@ CLAMAV_REPORTS_DIR = "/opt/oneagent/clamav-reports"
 MAX_RETRIES = 3
 RETRY_DELAY = 3  
 
-# Confluence API details from environment variables
 CONFLUENCE_BASE_URL = os.getenv("CONFLUENCE_BASE_URL")
 CONFLUENCE_USERNAME = os.getenv("CONFLUENCE_USERNAME")
 CONFLUENCE_API_TOKEN = os.getenv("CONFLUENCE_API_TOKEN")
@@ -156,25 +154,27 @@ def run_clamav_scan(version):
 
 def upload_report_to_confluence(report_file):
     """Uploads the ClamAV report to Confluence if it does not already exist."""
-    url = f"{CONFLUENCE_BASE_URL}/rest/api/content/{CONFLUENCE_PAGE_ID}/child/attachment"
-    auth = (CONFLUENCE_USERNAME, CONFLUENCE_API_TOKEN)
-    headers = {"X-Atlassian-Token": "no-check"}  # Fix for XSRF error
+    
+    confluence = Confluence(
+        url=CONFLUENCE_BASE_URL,
+        username=CONFLUENCE_USERNAME,
+        password=CONFLUENCE_API_TOKEN
+    )
 
-    response = requests.get(url, auth=auth, headers=headers)
-    if response.status_code == 200:
-        attachments = response.json().get("results", [])
-        if any(attachment["title"] == report_file.name for attachment in attachments):
-            logger.info(f"Report {report_file.name} already exists in Confluence. Skipping upload.")
-            return
+    existing_attachments = confluence.get_attachments(CONFLUENCE_PAGE_ID)
+    if existing_attachments:
+        for attachment in existing_attachments.get("results", []):
+            if attachment["title"] == report_file.name:
+                logger.info(f"Report {report_file.name} already exists in Confluence. Skipping upload.")
+                return
 
     logger.info(f"Uploading {report_file} to Confluence...")
-    files = {"file": (report_file.name, open(report_file, "rb"), "text/plain")}
-    response = requests.post(url, auth=auth, headers=headers, files=files)
-    
-    if response.status_code in [200, 201]:
+    result = confluence.attach_file(report_file, name=report_file.name, page_id=CONFLUENCE_PAGE_ID)
+
+    if result:
         logger.info(f"Report {report_file.name} uploaded successfully to Confluence.")
     else:
-        logger.error(f"Failed to upload report {report_file.name}. Response: {response.text}")
+        logger.error(f"Failed to upload report {report_file.name}.")
 
 def main():
     versions = get_available_versions()
