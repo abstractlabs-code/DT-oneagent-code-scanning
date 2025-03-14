@@ -128,6 +128,20 @@ def extract_sh(sh_path, extract_to):
     except subprocess.CalledProcessError as sh_err:
         logger.error(f"Failed to execute {sh_path}: {sh_err}")
 
+def update_clamav_database():
+    """Updates the ClamAV database using freshclam."""
+    logger.info("Updating ClamAV database using freshclam...")
+    update_command = ["freshclam"]
+    update_result = subprocess.run(update_command, capture_output=True, text=True)
+
+    if update_result.returncode != 0:
+        logger.error(f"Failed to update ClamAV database: {update_result.stderr}")
+        return False
+
+    logger.info("ClamAV database update completed successfully.")
+    return True
+    
+
 def run_clamav_scan(version):
     """Runs a ClamAV scan only if a report does not already exist."""
     report_file = Path(CLAMAV_REPORTS_DIR) / f"oneagent-version-{version}-clamav_report.txt"
@@ -177,6 +191,7 @@ def upload_report_to_confluence(report_file):
         logger.error(f"Failed to upload report {report_file.name}.")
 
 def main():
+    update_clamav_database()
     versions = get_available_versions()
     for version in versions:
         download_oneagent(version)
