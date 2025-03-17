@@ -175,15 +175,9 @@ def upload_report_to_confluence(report_file):
     )
 
     logger.info(f"Uploading {report_file} to Confluence...")
-    with open(report_file, "rb") as file:
-        response = confluence.attach_file(
-            filename=report_file.name,
-            page_id=CONFLUENCE_PAGE_ID,
-            file=file,
-            replace=True  
-        )
+    result = confluence.attach_file(report_file, name=report_file.name, page_id=CONFLUENCE_PAGE_ID)
 
-    if response:
+    if result:
         logger.info(f"Report {report_file.name} uploaded successfully to Confluence.")
     else:
         logger.error(f"Failed to upload report {report_file.name}.")
