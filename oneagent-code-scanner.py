@@ -167,25 +167,23 @@ def run_clamav_scan(version):
     return report_file
 
 def upload_report_to_confluence(report_file):
-    """Uploads the ClamAV report to Confluence if it does not already exist."""
-    
+    """Uploads the ClamAV report to Confluence, overwriting any existing report."""
     confluence = Confluence(
         url=CONFLUENCE_BASE_URL,
         username=CONFLUENCE_USERNAME,
         password=CONFLUENCE_API_TOKEN
     )
 
-    existing_attachments = confluence.get_attachments(CONFLUENCE_PAGE_ID)
-    if existing_attachments:
-        for attachment in existing_attachments.get("results", []):
-            if attachment["title"] == report_file.name:
-                logger.info(f"Report {report_file.name} already exists in Confluence. Skipping upload.")
-                return
-
     logger.info(f"Uploading {report_file} to Confluence...")
-    result = confluence.attach_file(report_file, name=report_file.name, page_id=CONFLUENCE_PAGE_ID)
+    with open(report_file, "rb") as file:
+        response = confluence.attach_file(
+            filename=report_file.name,
+            page_id=CONFLUENCE_PAGE_ID,
+            file=file,
+            replace=True  
+        )
 
-    if result:
+    if response:
         logger.info(f"Report {report_file.name} uploaded successfully to Confluence.")
     else:
         logger.error(f"Failed to upload report {report_file.name}.")
